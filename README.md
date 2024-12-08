@@ -42,6 +42,19 @@ A prominent example of this is UniswapV2 factory.
 Now, this would have led to significant gas savings because Uniswap is a very popular
 contract and has gotten millions of transactions.
 
+### Some statistics
+
+A swap call into the Uniswap V2 pool reads both `token0`, `token1` from storage.
+That'd cost 2100 * 2 gas assuming cold reads. By running a query through dune
+we can find out how much gas was consumed because of `token0` and `token1` not
+being immutable.
+
+At the time of running the query, it consumed over `55684.33513 ETH` which at the time
+of writing is almost $220M. Which could've been saved if they were immutable.
+
+![Uniswap V2 Additional Gas Consumption because of storage reads instead of immutables](./uniswap_v2_stats.jpeg)
+
+
 ## Solution
 
 We run an ExEx that will check all new transactions against a registry of [`Matcher`](./src/matcher.rs)
