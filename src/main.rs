@@ -1,14 +1,15 @@
-use alloy_consensus::BlockBody;
-use alloy_primitives::{Address, Bytes, FixedBytes, TxKind, address};
+use alloy_primitives::{Bytes, address, hex};
+use foundry_block_explorers::verify::CodeFormat;
 use futures::{Future, TryStreamExt};
+use reth::rpc::types::TransactionTrait;
+use reth_chainspec::Chain;
 use reth_exex::{ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
-use reth_primitives::{EthPrimitives, TransactionSigned};
 use reth_tracing::tracing::info;
 
 mod matcher;
-use matcher::Matcher;
+use matcher::{ContractDeployArgs, Matcher};
 
 /// The initialization logic of the ExEx is just an async function.
 ///
@@ -19,11 +20,19 @@ async fn exex_init<Node: FullNodeComponents>(
 ) -> eyre::Result<impl Future<Output = eyre::Result<()>>> {
     let matcher = Matcher::new(vec![(
         address!("0000000000000000000000000000000000000000"),
-        vec![(
-            [0xc9, 0xc6, 0x53, 0x96],
-            Bytes::from(&[0x00, 0x00, 0x00, 0x00]),
-            "(address,address)".into(),
-        )],
+        vec![ContractDeployArgs {
+            factory_selector: [0x00, 0x00, 0x00, 0x00],
+            init_code_without_args: Bytes::from(&hex!("00")),
+            source: todo!(),
+            code_format: CodeFormat::SingleFile,
+            param_types: "(address,address)".to_string(),
+            contract_name: "UniswapV2Pair".to_string(),
+            compiler_version: "".to_string(),
+            optimizations_used: None,
+            runs: None,
+            evm_version: None,
+            via_ir: None,
+        }],
     )]);
     Ok(exex(ctx, matcher))
 }
@@ -36,6 +45,11 @@ async fn exex<Node: FullNodeComponents>(
     mut ctx: ExExContext<Node>,
     matcher: Matcher,
 ) -> eyre::Result<()> {
+    let client = foundry_block_explorers::Client::new(
+        Chain::mainnet(),
+        std::env::var("ETHERSCAN_API_KEY")?,
+    )?;
+
     while let Some(notification) = ctx.notifications.try_next().await? {
         match &notification {
             ExExNotification::ChainCommitted { new } => {
@@ -50,30 +64,18 @@ async fn exex<Node: FullNodeComponents>(
         };
 
         if let Some(committed_chain) = notification.committed_chain() {
-            for block_receipts in committed_chain.receipts_with_attachment() {
-                for (tx_hash, tx_receipt) in block_receipts.tx_receipts {}
-            }
+            for block in committed_chain.blocks_iter() {
+                // for tx in &block.block.body.transactions {
+                for tx in block.transactions() {
+                    let tx_input = tx.input();
+                    let to = tx.to();
 
-            for (block, receipts) in committed_chain.blocks_and_receipts() {
-                for tx in &block.block.body.transactions {
-                    if let Some((tx_to, tx_input)) = match tx.transaction {
-                        reth_primitives::Transaction::Legacy(tx) => Some((tx.to, tx.input.clone())),
-                        reth_primitives::Transaction::Eip2930(tx_eip2930) => {
-                            Some((tx_eip2930.to, tx_eip2930.input.clone()))
-                        }
-                        reth_primitives::Transaction::Eip1559(tx_eip1559) => {
-                            Some((tx_eip1559.to, tx_eip1559.input.clone()))
-                        }
-                        reth_primitives::Transaction::Eip4844(tx_eip4844) => None,
-                        reth_primitives::Transaction::Eip7702(tx_eip7702) => {
-                            Some((TxKind::Call(tx_eip7702.to), tx_eip7702.input.clone()))
-                        }
-                    } {
-                        if let TxKind::Call(tx_to) = tx_to {
-                            if let Some(decoded) = matcher.get_constructor_args(tx_to, &tx_input) {
-                                println!("{:?}", decoded);
-                                // TODO: verify the contract on etherscan
-                            }
+                    if let Some(to) = to {
+                        if let Some(verify_args) = matcher.get_verification_args(to, tx_input) {
+                            println!("trying to verify contract {:?}", verify_args);
+                            let response =
+                                client.submit_contract_verification(&verify_args).await?;
+                            println!("contract verified successfully: {:?}", response);
                         }
                     }
                 }

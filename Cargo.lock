@@ -1263,6 +1263,7 @@ dependencies = [
  "foundry-block-explorers",
  "futures",
  "futures-util",
+ "hex",
  "reth",
  "reth-chainspec",
  "reth-discv5",
